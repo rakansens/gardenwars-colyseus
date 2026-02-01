@@ -79,10 +79,10 @@ export class ServerCombatSystem {
   update(deltaMs: number): void {
     // 全ユニット更新
     for (const [instanceId, serverUnit] of this.serverUnits) {
-      if (serverUnit.state === 'DIE') continue;
-
       serverUnit.stateTimer += deltaMs;
-      this.updateUnitState(serverUnit, deltaMs);
+      if (serverUnit.state !== 'DIE') {
+        this.updateUnitState(serverUnit, deltaMs);
+      }
 
       // スキーマ同期
       const schema = this.state.units.get(instanceId);
