@@ -80,7 +80,7 @@ export class BattleRoom extends Room<BattleState> {
 
     // デッキ設定（バリデーション）
     const receivedDeck = options.deck || [];
-    const validDeck = receivedDeck.filter(id => isValidUnit(id)).slice(0, 5);
+    const validDeck = receivedDeck.filter(id => isValidUnit(id)).slice(0, 7);
     console.log(`[BattleRoom] Player deck - received: [${receivedDeck.join(', ')}], valid: [${validDeck.join(', ')}]`);
     player.deck.push(...validDeck);
 
