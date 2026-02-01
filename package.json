@@ -1,0 +1,25 @@
+{
+  "name": "gardenwars-colyseus",
+  "version": "1.0.0",
+  "description": "Garden Wars Realtime Battle Server",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "npx ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@colyseus/core": "^0.16.0",
+    "@colyseus/schema": "^3.0.0",
+    "@colyseus/ws-transport": "^0.16.0",
+    "colyseus": "^0.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,11 @@
+# Render deployment configuration for Colyseus server
+services:
+  - type: web
+    name: gardenwars-colyseus
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
