@@ -43,4 +43,6 @@ export class BattleState extends Schema {
     @type({ map: UnitSchema }) units = new MapSchema<UnitSchema>();
     @type("string") winnerId: string = "";      // 勝者のsessionId
     @type("string") winReason: string = "";     // 勝利理由
+    @type("number") gameSpeed: number = 1;      // 1x or 2x (mutual agreement)
+    @type({ map: "boolean" }) speedVotes = new MapSchema<boolean>(); // sessionId -> wants 2x
 }

@@ -59,6 +59,7 @@ export class BattleRoom extends Room<BattleState> {
     this.onMessage("ready", this.handleReady.bind(this));
     this.onMessage("summon", this.handleSummon.bind(this));
     this.onMessage("upgrade_cost", this.handleUpgradeCost.bind(this));
+    this.onMessage("speed_vote", this.handleSpeedVote.bind(this));
   }
 
   onJoin(client: Client, options: JoinOptions): void {
@@ -91,6 +92,9 @@ export class BattleRoom extends Room<BattleState> {
 
     // スポーンクールダウン初期化
     this.spawnCooldowns.set(client.sessionId, new Map());
+    // 速度投票初期化
+    this.state.speedVotes.set(client.sessionId, false);
+    this.recalculateGameSpeed();
 
     // 1人目の場合、メタデータ更新（ロビー表示用）
     if (this.state.players.size === 1) {
@@ -138,6 +142,10 @@ export class BattleRoom extends Room<BattleState> {
       });
     });
     client.send("all_players", { players: allPlayers });
+    client.send("speed_update", {
+      gameSpeed: this.state.gameSpeed,
+      speedVotes: this.getSpeedVotesObject()
+    });
 
     // 2人揃ったらルームをロック
     if (this.state.players.size === 2) {
@@ -167,6 +175,8 @@ export class BattleRoom extends Room<BattleState> {
 
     this.state.players.delete(client.sessionId);
     this.spawnCooldowns.delete(client.sessionId);
+    this.state.speedVotes.delete(client.sessionId);
+    this.recalculateGameSpeed();
   }
 
   onDispose(): void {
@@ -291,6 +301,13 @@ export class BattleRoom extends Room<BattleState> {
     }
   }
 
+  private handleSpeedVote(client: Client, message: { enabled?: boolean }): void {
+    const enabled = message?.enabled === true;
+    if (!this.state.players.has(client.sessionId)) return;
+    this.state.speedVotes.set(client.sessionId, enabled);
+    this.recalculateGameSpeed();
+  }
+
   // ============================================
   // Game Loop
   // ============================================
@@ -301,7 +318,12 @@ export class BattleRoom extends Room<BattleState> {
     this.state.countdown = this.COUNTDOWN_SECONDS;
 
     // フェーズ変更をブロードキャスト
-    this.broadcast("phase_change", { phase: 'countdown', countdown: this.COUNTDOWN_SECONDS });
+    this.broadcast("phase_change", {
+      phase: 'countdown',
+      countdown: this.COUNTDOWN_SECONDS,
+      gameSpeed: this.state.gameSpeed,
+      speedVotes: this.getSpeedVotesObject()
+    });
 
     const countdownInterval = setInterval(() => {
       this.state.countdown--;
@@ -327,7 +349,11 @@ export class BattleRoom extends Room<BattleState> {
     this.setMetadata({ status: 'playing' });
 
     // フェーズ変更をブロードキャスト
-    this.broadcast("phase_change", { phase: 'playing' });
+    this.broadcast("phase_change", {
+      phase: 'playing',
+      gameSpeed: this.state.gameSpeed,
+      speedVotes: this.getSpeedVotesObject()
+    });
 
     this.gameLoop = setInterval(() => {
       this.tick();
@@ -339,23 +365,26 @@ export class BattleRoom extends Room<BattleState> {
     const deltaMs = now - this.lastUpdateTime;
     this.lastUpdateTime = now;
 
-    this.state.gameTime += deltaMs;
+    const gameSpeed = this.state.gameSpeed || 1;
+    const adjustedDelta = deltaMs * gameSpeed;
+
+    this.state.gameTime += adjustedDelta;
 
     // コスト回復
     this.state.players.forEach(player => {
-      ServerCostSystem.update(player, deltaMs);
+      ServerCostSystem.update(player, adjustedDelta);
     });
 
     // スポーンクールダウン更新
     this.spawnCooldowns.forEach(cooldowns => {
       cooldowns.forEach((remaining, unitId) => {
-        const newRemaining = Math.max(0, remaining - deltaMs);
+        const newRemaining = Math.max(0, remaining - adjustedDelta);
         cooldowns.set(unitId, newRemaining);
       });
     });
 
     // 戦闘更新
-    this.combatSystem.update(deltaMs);
+    this.combatSystem.update(adjustedDelta);
 
     // ユニット状態をブロードキャスト（毎ティック）
     const unitsArray: any[] = [];
@@ -396,7 +425,9 @@ export class BattleRoom extends Room<BattleState> {
       this.broadcast("phase_change", {
         phase: 'finished',
         winnerId: this.state.winnerId,
-        winReason: this.state.winReason
+        winReason: this.state.winReason,
+        gameSpeed: this.state.gameSpeed,
+        speedVotes: this.getSpeedVotesObject()
       });
     }
   }
@@ -414,5 +445,31 @@ export class BattleRoom extends Room<BattleState> {
 
   private sendError(client: Client, code: string, message: string): void {
     client.send("error", { code, message });
+  }
+
+  private recalculateGameSpeed(): void {
+    if (this.state.players.size < 2) {
+      this.state.gameSpeed = 1;
+    } else {
+      let allAgreed = true;
+      this.state.players.forEach((_player, sessionId) => {
+        if (this.state.speedVotes.get(sessionId) !== true) {
+          allAgreed = false;
+        }
+      });
+      this.state.gameSpeed = allAgreed ? 2 : 1;
+    }
+    this.broadcast("speed_update", {
+      gameSpeed: this.state.gameSpeed,
+      speedVotes: this.getSpeedVotesObject()
+    });
+  }
+
+  private getSpeedVotesObject(): Record<string, boolean> {
+    const votes: Record<string, boolean> = {};
+    this.state.speedVotes.forEach((value, key) => {
+      votes[key] = value === true;
+    });
+    return votes;
   }
 }
