@@ -2,6 +2,7 @@ import { Server, matchMaker } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { createServer } from "http";
 import { BattleRoom } from "./rooms/BattleRoom";
+import { ChessRoom } from "./rooms/ChessRoom";
 
 // ============================================
 // Garden Wars Colyseus Server
@@ -47,6 +48,30 @@ const httpServer = createServer((req, res) => {
     return;
   }
 
+
+  // チェス部屋一覧API
+  if (req.method === 'GET' && req.url === '/chess/rooms') {
+    matchMaker.query({ name: 'chess' })
+      .then((rooms) => {
+        const waitingRooms = rooms
+          .filter(room => room.metadata?.status === 'waiting' && room.clients === 1)
+          .map(room => ({
+            roomId: room.roomId,
+            hostName: room.metadata?.hostName || 'Unknown',
+            createdAt: room.metadata?.createdAt || Date.now()
+          }));
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ rooms: waitingRooms }));
+      })
+      .catch((err) => {
+        console.error('[API] Error querying chess rooms:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to query rooms' }));
+      });
+    return;
+  }
+
   // ヘルスチェック
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -70,6 +95,10 @@ const gameServer = new Server({
 // ルーム登録
 gameServer.define("battle", BattleRoom)
   .enableRealtimeListing();  // リアルタイムでルーム一覧を取得可能に
+
+// チェスルーム登録
+gameServer.define("chess", ChessRoom)
+  .enableRealtimeListing();
 
 // サーバー起動
 // IMPORTANT: Renderでは 0.0.0.0 にバインドする必要がある
