@@ -3,6 +3,7 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { createServer } from "http";
 import { BattleRoom } from "./rooms/BattleRoom";
 import { ChessRoom } from "./rooms/ChessRoom";
+import { TradeRoom } from "./rooms/TradeRoom";
 
 // ============================================
 // Garden Wars Colyseus Server
@@ -72,6 +73,29 @@ const httpServer = createServer((req, res) => {
     return;
   }
 
+  // Trade rooms API
+  if (req.method === 'GET' && req.url === '/trade/rooms') {
+    matchMaker.query({ name: 'trade' })
+      .then((rooms) => {
+        const waitingRooms = rooms
+          .filter(room => room.metadata?.status === 'waiting' && room.clients === 1)
+          .map(room => ({
+            roomId: room.roomId,
+            hostName: room.metadata?.hostName || 'Unknown',
+            createdAt: room.metadata?.createdAt || Date.now()
+          }));
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ rooms: waitingRooms }));
+      })
+      .catch((err) => {
+        console.error('[API] Error querying trade rooms:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to query rooms' }));
+      });
+    return;
+  }
+
   // ヘルスチェック
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -98,6 +122,10 @@ gameServer.define("battle", BattleRoom)
 
 // チェスルーム登録
 gameServer.define("chess", ChessRoom)
+  .enableRealtimeListing();
+
+// Trade room registration
+gameServer.define("trade", TradeRoom)
   .enableRealtimeListing();
 
 // サーバー起動

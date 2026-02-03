@@ -3,6 +3,7 @@ import { BattleState, PlayerSchema, UnitSchema } from "../schemas/BattleState";
 import { ServerCostSystem } from "../systems/ServerCostSystem";
 import { ServerCombatSystem } from "../systems/ServerCombatSystem";
 import { getUnitDefinition, isValidUnit } from "../data/units";
+import { saveRealtimeBattleResult } from "../lib/supabase";
 
 // ============================================
 // BattleRoom - リアルタイム1vs1対戦ルーム
@@ -421,6 +422,10 @@ export class BattleRoom extends Room<BattleState> {
     if (this.state.phase === 'finished') {
       this.stopGameLoop();
       console.log(`[BattleRoom] Game finished - Winner: ${this.state.winnerId}, Reason: ${this.state.winReason}`);
+
+      // バトル結果をDBに保存
+      this.saveBattleResult();
+
       // ゲーム終了をブロードキャスト
       this.broadcast("phase_change", {
         phase: 'finished',
@@ -471,5 +476,61 @@ export class BattleRoom extends Room<BattleState> {
       votes[key] = value === true;
     });
     return votes;
+  }
+
+  /**
+   * Save battle result to database
+   */
+  private async saveBattleResult(): Promise<void> {
+    try {
+      // Get both players
+      const players: PlayerSchema[] = [];
+      const sessionIds: string[] = [];
+      this.state.players.forEach((player, sessionId) => {
+        players.push(player);
+        sessionIds.push(sessionId);
+      });
+
+      if (players.length !== 2) {
+        console.warn("[BattleRoom] Cannot save battle result: not 2 players");
+        return;
+      }
+
+      const [player1, player2] = players;
+      const [session1, session2] = sessionIds;
+
+      // Determine winner (1 or 2)
+      let winnerPlayerNum: 1 | 2 = 1;
+      if (this.state.winnerId === session2) {
+        winnerPlayerNum = 2;
+      }
+
+      // Calculate kills for each player
+      const player1Kills = this.combatSystem.getKillCount(session1);
+      const player2Kills = this.combatSystem.getKillCount(session2);
+
+      const result = {
+        player1_id: player1.odeyoId,
+        player2_id: player2.odeyoId,
+        player1_name: player1.displayName,
+        player2_name: player2.displayName,
+        player1_deck: [...player1.deck],
+        player2_deck: [...player2.deck],
+        winner_player_num: winnerPlayerNum,
+        player1_castle_hp: player1.castleHp,
+        player2_castle_hp: player2.castleHp,
+        player1_kills: player1Kills,
+        player2_kills: player2Kills,
+        battle_duration: Math.floor(this.state.gameTime / 1000),
+        win_reason: this.state.winReason || 'castle_destroyed',
+      };
+
+      const saveResult = await saveRealtimeBattleResult(result);
+      if (!saveResult.success) {
+        console.error("[BattleRoom] Failed to save battle result:", saveResult.error);
+      }
+    } catch (err) {
+      console.error("[BattleRoom] Error saving battle result:", err);
+    }
   }
 }

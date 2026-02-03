@@ -16,9 +16,17 @@ const CASTLE_POSITIONS = {
 export class ServerCombatSystem {
   private state: BattleState;
   private serverUnits: Map<string, ServerUnit> = new Map();
+  private killCounts: Map<string, number> = new Map(); // sessionId -> kills
 
   constructor(state: BattleState) {
     this.state = state;
+  }
+
+  /**
+   * Get kill count for a player
+   */
+  getKillCount(sessionId: string): number {
+    return this.killCounts.get(sessionId) || 0;
   }
 
   /**
@@ -203,7 +211,7 @@ export class ServerCombatSystem {
     const target = attacker.targetId ? this.serverUnits.get(attacker.targetId) : null;
 
     if (target && target.state !== 'DIE') {
-      this.applyDamage(target, attacker.definition.attackDamage, attacker.definition.knockback);
+      this.applyDamage(target, attacker.definition.attackDamage, attacker.definition.knockback, attacker.side);
       return;
     }
 
@@ -216,13 +224,22 @@ export class ServerCombatSystem {
     }
   }
 
-  private applyDamage(target: ServerUnit, damage: number, knockback: number): void {
+  private applyDamage(target: ServerUnit, damage: number, knockback: number, attackerSide?: 'player1' | 'player2'): void {
     target.hp -= damage;
     target.damageAccumulated += damage;
 
     if (target.hp <= 0) {
       target.hp = 0;
       this.setUnitState(target, 'DIE');
+
+      // Track kill count for the attacker
+      if (attackerSide) {
+        const attackerSessionId = this.getSessionIdBySide(attackerSide);
+        if (attackerSessionId) {
+          const currentKills = this.killCounts.get(attackerSessionId) || 0;
+          this.killCounts.set(attackerSessionId, currentKills + 1);
+        }
+      }
       return;
     }
 
@@ -370,11 +387,17 @@ export class ServerCombatSystem {
     return sessionId ? this.state.players.get(sessionId) : undefined;
   }
 
+  private getSessionIdBySide(side: 'player1' | 'player2'): string | undefined {
+    const playerIds = Array.from(this.state.players.keys());
+    return side === 'player1' ? playerIds[0] : playerIds[1];
+  }
+
   /**
    * リセット
    */
   reset(): void {
     this.serverUnits.clear();
     this.state.units.clear();
+    this.killCounts.clear();
   }
 }
