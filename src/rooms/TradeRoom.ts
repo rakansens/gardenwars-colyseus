@@ -1,11 +1,12 @@
 import { Room, Client } from "@colyseus/core";
 import { TradeState, TradePlayerSchema } from "../schemas/TradeState";
-import { executeTrade } from "../lib/supabase";
+import { executeTrade, getPlayerByPin } from "../lib/supabase";
 
 interface JoinOptions {
   displayName?: string;
   playerId?: string;
   quickMatch?: boolean;
+  pin?: string;
 }
 
 interface OfferPayload {
@@ -20,6 +21,11 @@ interface ReadyPayload {
 interface TradeOffer {
   units: Record<string, number>;
   coins: number;
+}
+
+interface TradeAuthContext {
+  playerId: string;
+  displayName: string;
 }
 
 const EMPTY_OFFER: TradeOffer = { units: {}, coins: 0 };
@@ -45,6 +51,27 @@ export class TradeRoom extends Room<TradeState> {
     this.onMessage("trade_cancel", this.handleTradeCancel.bind(this));
   }
 
+  async onAuth(client: Client, options: JoinOptions): Promise<TradeAuthContext> {
+    const pin = typeof options?.pin === "string" ? options.pin.trim() : "";
+    if (!pin) {
+      throw new Error("PIN_REQUIRED");
+    }
+
+    const result = await getPlayerByPin(pin);
+    if (!result.success || !result.player) {
+      throw new Error(result.error || "INVALID_PIN");
+    }
+
+    if (options?.playerId && options.playerId !== result.player.id) {
+      throw new Error("PLAYER_MISMATCH");
+    }
+
+    return {
+      playerId: result.player.id,
+      displayName: result.player.name,
+    };
+  }
+
   onJoin(client: Client, options: JoinOptions): void {
     console.log("[TradeRoom] Player joined:", client.sessionId);
 
@@ -53,10 +80,16 @@ export class TradeRoom extends Room<TradeState> {
       return;
     }
 
+    const auth = client.auth as TradeAuthContext | undefined;
+    if (!auth?.playerId) {
+      client.leave();
+      return;
+    }
+
     const player = new TradePlayerSchema();
     player.sessionId = client.sessionId;
-    player.displayName = options.displayName || `Player ${this.state.players.size + 1}`;
-    player.playerId = options.playerId || "";
+    player.displayName = auth.displayName || options.displayName || `Player ${this.state.players.size + 1}`;
+    player.playerId = auth.playerId;
 
     this.state.players.set(client.sessionId, player);
     this.offers.set(client.sessionId, { units: {}, coins: 0 });
@@ -159,22 +192,20 @@ export class TradeRoom extends Room<TradeState> {
   }
 
   private handleOfferUpdate(client: Client, message: OfferPayload): void {
-    if (this.state.phase === "finished") return;
+    if (this.state.phase === "finished" || this.isSettling) return;
 
     const offer = this.normalizeOffer(message);
     this.offers.set(client.sessionId, offer);
-    this.readyStates.set(client.sessionId, false);
+    this.resetReadyStates();
 
     this.broadcast("offer_update", {
       sessionId: client.sessionId,
       offer,
     }, { except: client });
-
-    this.broadcastReadyStates();
   }
 
   private handleOfferReady(client: Client, message: ReadyPayload): void {
-    if (this.state.phase === "finished") return;
+    if (this.state.phase === "finished" || this.isSettling) return;
 
     const ready = !!message?.ready;
     this.readyStates.set(client.sessionId, ready);
@@ -183,7 +214,7 @@ export class TradeRoom extends Room<TradeState> {
   }
 
   private handleTradeConfirm(client: Client): void {
-    if (this.state.phase === "finished") return;
+    if (this.state.phase === "finished" || this.isSettling) return;
     this.readyStates.set(client.sessionId, true);
     this.broadcastReadyStates();
     void this.tryCompleteTrade();
