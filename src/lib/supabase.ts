@@ -48,10 +48,6 @@ export interface TradeExecutionResult {
   server_time?: string;
 }
 
-export interface PlayerIdentity {
-  id: string;
-  name: string;
-}
 
 /**
  * Save realtime battle result to database
@@ -113,35 +109,6 @@ export async function executeTrade(
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : "Unknown error";
     console.error("[Supabase] Exception executing trade:", err);
-    return { success: false, error: errorMsg };
-  }
-}
-
-/**
- * Verify player identity via PIN (server-side).
- */
-export async function getPlayerByPin(pin: string): Promise<{ success: boolean; error?: string; player?: PlayerIdentity }> {
-  const normalized = typeof pin === "string" ? pin.trim() : "";
-  if (!normalized) {
-    return { success: false, error: "pin_required" };
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from("players")
-      .select("id, name")
-      .eq("pin", normalized)
-      .single();
-
-    if (error || !data) {
-      console.error("[Supabase] Failed to verify PIN:", error);
-      return { success: false, error: "invalid_pin" };
-    }
-
-    return { success: true, player: { id: data.id, name: data.name } };
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Unknown error";
-    console.error("[Supabase] Exception verifying PIN:", err);
     return { success: false, error: errorMsg };
   }
 }
