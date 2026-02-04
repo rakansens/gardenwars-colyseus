@@ -13,6 +13,7 @@ export class UnitSchema extends Schema {
     @type("string") state: string = "SPAWN";  // SPAWN | WALK | ATTACK_WINDUP | ATTACK_COOLDOWN | HITSTUN | DIE
     @type("number") stateTimer: number = 0;
     @type("string") targetId: string = "";  // ターゲットのinstanceId
+    @type("number") width: number = 60;  // ユニットの幅（衝突判定用）
 }
 
 // ============================================

@@ -62,6 +62,7 @@ export interface ServerUnit {
   stateTimer: number;
   targetId: string | null;
   damageAccumulated: number;
+  width: number;  // ユニットの幅（衝突判定用）
 }
 
 /**

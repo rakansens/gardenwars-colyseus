@@ -13,6 +13,10 @@ const CASTLE_POSITIONS = {
   player2: 1120  // 右側（stageLength - 80）
 };
 
+// ユニット衝突判定用定数
+const DEFAULT_UNIT_WIDTH = 60;  // 基本幅
+const UNIT_MIN_DISTANCE = 30;   // ユニット間の最小距離
+
 export class ServerCombatSystem {
   private state: BattleState;
   private serverUnits: Map<string, ServerUnit> = new Map();
@@ -49,6 +53,10 @@ export class ServerCombatSystem {
 
     const instanceId = `${side}_${unitId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+    // ユニット幅を計算（scaleがあれば適用）
+    const scale = (definition as any).scale || 1.0;
+    const unitWidth = DEFAULT_UNIT_WIDTH * scale;
+
     // サーバー内部データ
     const serverUnit: ServerUnit = {
       instanceId,
@@ -61,7 +69,8 @@ export class ServerCombatSystem {
       state: 'SPAWN',
       stateTimer: 0,
       targetId: null,
-      damageAccumulated: 0
+      damageAccumulated: 0,
+      width: unitWidth
     };
     this.serverUnits.set(instanceId, serverUnit);
 
@@ -76,6 +85,7 @@ export class ServerCombatSystem {
     unitSchema.state = 'SPAWN';
     unitSchema.stateTimer = 0;
     unitSchema.targetId = '';
+    unitSchema.width = unitWidth;
     this.state.units.set(instanceId, unitSchema);
 
     return instanceId;
@@ -100,8 +110,12 @@ export class ServerCombatSystem {
         schema.state = serverUnit.state;
         schema.stateTimer = serverUnit.stateTimer;
         schema.targetId = serverUnit.targetId || '';
+        schema.width = serverUnit.width;
       }
     }
+
+    // ユニット衝突判定（すり抜け防止）
+    this.resolveUnitCollisions();
 
     // ターゲット割り当て
     this.assignTargets();
@@ -157,6 +171,11 @@ export class ServerCombatSystem {
       return;
     }
 
+    // 敵ユニットが前方にいて近すぎる場合は停止
+    if (this.isBlockedByEnemy(unit)) {
+      return;  // 移動しない
+    }
+
     // 前進
     const speed = unit.definition.speed * (deltaMs / 1000);
     const direction = unit.side === 'player1' ? 1 : -1;
@@ -168,6 +187,32 @@ export class ServerCombatSystem {
     } else {
       unit.x = Math.max(unit.x, 80);
     }
+  }
+
+  /**
+   * 敵ユニットにブロックされているかチェック
+   */
+  private isBlockedByEnemy(unit: ServerUnit): boolean {
+    const enemySide = unit.side === 'player1' ? 'player2' : 'player1';
+    const isMovingRight = unit.side === 'player1';
+
+    for (const [, enemy] of this.serverUnits) {
+      if (enemy.side !== enemySide || enemy.state === 'DIE') continue;
+
+      // 前方にいるかチェック
+      const isInFront = isMovingRight ? enemy.x > unit.x : enemy.x < unit.x;
+      if (!isInFront) continue;
+
+      // エッジベースの距離計算
+      const distanceToEdge = this.getEdgeDistance(unit, enemy);
+      const minDistance = (unit.width + enemy.width) / 2 * 0.5 + UNIT_MIN_DISTANCE;
+
+      if (distanceToEdge < minDistance) {
+        return true;  // ブロックされている
+      }
+    }
+
+    return false;
   }
 
   private handleAttackWindup(unit: ServerUnit): void {
@@ -285,43 +330,127 @@ export class ServerCombatSystem {
     const enemySide = attacker.side === 'player1' ? 'player2' : 'player1';
     let closestInFront: ServerUnit | null = null;
     let minDistanceFront = Infinity;
+    let closestAny: ServerUnit | null = null;
+    let minDistanceAny = Infinity;
 
     for (const [, unit] of this.serverUnits) {
       if (unit.side !== enemySide || unit.state === 'DIE') continue;
 
-      const distance = Math.abs(attacker.x - unit.x);
-      const rangeWithBody = attacker.definition.attackRange + 50;
+      // エッジベースの距離計算
+      const edgeDistance = this.getEdgeDistance(attacker, unit);
 
-      if (distance > rangeWithBody) continue;
+      // 射程チェック（少し余裕を持って探索）
+      if (edgeDistance > attacker.definition.attackRange + 20) continue;
 
       // 前方にいるか
       const isInFront = attacker.side === 'player1'
         ? unit.x > attacker.x
         : unit.x < attacker.x;
 
-      if (isInFront && distance < minDistanceFront) {
-        minDistanceFront = distance;
+      if (isInFront && edgeDistance < minDistanceFront) {
+        minDistanceFront = edgeDistance;
         closestInFront = unit;
+      }
+
+      // 全方向で最も近い敵も記録（バックアップ）
+      if (edgeDistance < minDistanceAny) {
+        minDistanceAny = edgeDistance;
+        closestAny = unit;
       }
     }
 
-    return closestInFront?.instanceId ?? null;
+    // 前方優先、なければ最も近い敵
+    return closestInFront?.instanceId ?? closestAny?.instanceId ?? null;
   }
 
   /**
-   * 射程チェック
+   * エッジベースの距離計算（ユニットの端と端の距離）
+   */
+  private getEdgeDistance(unitA: ServerUnit, unitB: ServerUnit): number {
+    const xA = unitA.x;
+    const xB = unitB.x;
+    const halfWidthA = unitA.width / 2;
+    const halfWidthB = unitB.width / 2;
+
+    if (xA < xB) {
+      // Aが左、Bが右：Aの右端とBの左端の距離
+      return (xB - halfWidthB) - (xA + halfWidthA);
+    } else {
+      // Aが右、Bが左：Aの左端とBの右端の距離
+      return (xA - halfWidthA) - (xB + halfWidthB);
+    }
+  }
+
+  /**
+   * 射程チェック（エッジベース）
    */
   private isInRange(attacker: ServerUnit, target: ServerUnit): boolean {
-    const distance = Math.abs(attacker.x - target.x);
-    return distance <= attacker.definition.attackRange + 50;
+    const edgeDistance = this.getEdgeDistance(attacker, target);
+    // エッジ距離が射程以下なら射程内
+    return edgeDistance <= attacker.definition.attackRange;
   }
 
   private isInRangeOfEnemyCastle(unit: ServerUnit): boolean {
     const enemyCastleX = unit.side === 'player1'
       ? CASTLE_POSITIONS.player2
       : CASTLE_POSITIONS.player1;
-    const distance = Math.abs(unit.x - enemyCastleX);
+    // ユニットの端から城までの距離
+    const halfWidth = unit.width / 2;
+    const edgeX = unit.side === 'player1' ? unit.x + halfWidth : unit.x - halfWidth;
+    const distance = Math.abs(edgeX - enemyCastleX);
     return distance <= unit.definition.attackRange;
+  }
+
+  /**
+   * ユニット衝突判定と位置補正
+   */
+  private resolveUnitCollisions(): void {
+    const units = Array.from(this.serverUnits.values()).filter(u => u.state !== 'DIE');
+
+    // 同陣営のユニット同士の衝突（重なり防止）
+    for (let i = 0; i < units.length; i++) {
+      const unitA = units[i];
+
+      for (let j = i + 1; j < units.length; j++) {
+        const unitB = units[j];
+
+        // 同じ陣営同士のみ押し出し
+        if (unitA.side !== unitB.side) continue;
+
+        const distance = Math.abs(unitA.x - unitB.x);
+        const minDistance = (unitA.width + unitB.width) / 2 * 0.6 + UNIT_MIN_DISTANCE;
+
+        if (distance < minDistance && distance > 0) {
+          const overlap = minDistance - distance;
+          const pushAmount = overlap * 0.5;
+
+          if (unitA.x < unitB.x) {
+            unitA.x -= pushAmount / 2;
+            unitB.x += pushAmount / 2;
+          } else {
+            unitA.x += pushAmount / 2;
+            unitB.x -= pushAmount / 2;
+          }
+
+          // 境界チェック
+          this.clampUnitPosition(unitA);
+          this.clampUnitPosition(unitB);
+        }
+      }
+    }
+  }
+
+  /**
+   * ユニット位置を境界内に制限
+   */
+  private clampUnitPosition(unit: ServerUnit): void {
+    if (unit.side === 'player1') {
+      unit.x = Math.max(unit.x, CASTLE_POSITIONS.player1 + 30);
+      unit.x = Math.min(unit.x, this.state.stageLength - 30);
+    } else {
+      unit.x = Math.max(unit.x, 80);
+      unit.x = Math.min(unit.x, CASTLE_POSITIONS.player2 - 30);
+    }
   }
 
   /**
